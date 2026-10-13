@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="id">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Domino Island — Self Test</title>
+    <style>
+      body {
+        font-family: ui-monospace, monospace;
+        background: #0b1030;
+        color: #e8ecff;
+        padding: 1.5rem;
+      }
+      h1 {
+        color: #ffd23f;
+      }
+      .pass {
+        color: #2fd27a;
+      }
+      .fail {
+        color: #ff5964;
+        font-weight: bold;
+      }
+      .row {
+        padding: 2px 0;
+      }
+      #summary {
+        margin-top: 1rem;
+        font-size: 1.2rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Domino Island — Engine Self Test</h1>
+    <div id="out"></div>
+    <div id="summary"></div>
+
+    <!-- Load the standalone bundle WITHOUT auto-booting the UI.
+         We stub #app so boot() is harmless, then run assertions. -->
+    <div id="app" style="display: none"></div>
+    <script src="./game.js"></script>
+    <script>
+      (function () {
+        const out = document.getElementById('out');
+        let pass = 0,
+          fail = 0;
+        function check(name, cond) {
+          const div = document.createElement('div');
+          div.className = 'row ' + (cond ? 'pass' : 'fail');
+          div.textContent = (cond ? '✓ ' : '✗ FAIL: ') + name;
+          out.appendChild(div);
+          cond ? pass++ : fail++;
+        }
+
+        const DI = window.DominoIsland;
+
+        // 1. Deck integrity
+        const deck = DI.fullDeck();
+        check('Full deck has 28 unique tiles', deck.length === 28 && new Set(deck.map((t) => t.id)).size === 28);
+
+        // 2. Deterministic shuffle: same seed -> same opening
+        const players = [
+          { id: 'a', name: 'A', isBot: false },
+          { id: 'b', name: 'B', isBot: true },
+          { id: 'c', name: 'C', isBot: true },
+          { id: 'd', name: 'D', isBot: true },
+        ];
+        const g1 = new DI.GapleGame(players, 42);
+        g1.startRound();
+        const g2 = new DI.GapleGame(players, 42);
+        g2.startRound();
+        check('Same seed -> identical opening player', g1.state.turn === g2.state.turn);
+        check('Each Gaple player dealt 7 tiles', g1.players.every((p) => p.hand.length === 7));
+
+        // 3. Legal moves on empty board = whole hand
+        check('Opening legal moves = full hand', g1.legalMoves(g1.state.turn).length === 7);
+
+        // 4. Play a full round with bots until it ends
+        const g3 = new DI.GapleGame(players, 7);
+        g3.startRound();
+        let guard = 0;
+        while (g3.state.phase === 'playing' && guard < 1000) {
+          const idx = g3.state.turn;
+          const action = DI.gapleBotMove(g3, idx);
+          const res = g3.applyAction(action);
+          if (!res.ok && action.type === 'play') g3.applyAction({ type: 'pass' });
+          guard++;
+        }
+        check('Gaple round terminates (no infinite loop)', g3.state.phase !== 'playing' && guard < 1000);
+        check('Gaple round has a winner', g3.state.roundWinner != null);
+
+        // 5. Board ends are consistent with the line
+        if (g3.state.line.length > 0) {
+          const left = g3.state.line[0].a;
+          const right = g3.state.line[g3.state.line.length - 1].b;
+          check('Board leftEnd matches line head', g3.state.leftEnd === left);
+          check('Board rightEnd matches line tail', g3.state.rightEnd === right);
+        }
+
+        // 6. QiuQiu scoring sanity
+        const qq = new DI.QiuQiuGame(players, 99, { ante: 10 });
+        qq.startRound();
+        check('QiuQiu pot = ante*4', qq.state.pot === 40);
+        check('QiuQiu players dealt 4 tiles', qq.players.every((p) => p.hand.length === 4));
+        const r = qq.resolve();
+        check('QiuQiu produces a winner', r.winner >= 0 && r.winner < 4);
+        check('QiuQiu winner received pot', qq.players[r.winner].chips >= 500 - 10 + 40 - 1);
+
+        // 7. evaluateHand specials
+        const t = (a, b) => ({ a: Math.min(a, b), b: Math.max(a, b), id: Math.min(a, b) + '-' + Math.max(a, b) });
+        const balak = DI.evaluateHand([t(1, 1), t(2, 2), t(3, 3), t(4, 4)]);
+        check('Balak (4 doubles) recognized', balak.label.indexOf('Balak') === 0);
+        const sixGods = DI.evaluateHand([t(6, 6), t(6, 6), t(6, 5), t(6, 5)]);
+        check('Enam Dewa (>=40 pips) recognized', sixGods.label === 'Enam Dewa');
+        const small = DI.evaluateHand([t(0, 0), t(0, 1), t(1, 1), t(2, 2)]);
+        check('Murni Kecil (<=9 pips) recognized', small.label === 'Murni Kecil');
+
+        // 8. Tournament bracket
+        const parts = players.map((p) => ({ id: p.id, name: p.name, isBot: p.isBot }));
+        const br = DI.createBracket(parts);
+        check('Bracket size padded to power of 2', br.size === 4);
+        check('Bracket round count correct (4 -> 2 rounds)', br.rounds.length === 2);
+        DI.reportResult(br, 0, 0, parts[0]);
+        DI.reportResult(br, 0, 1, parts[2]);
+        check('Winners advance to next round', br.rounds[1][0].a && br.rounds[1][0].b);
+        DI.reportResult(br, 1, 0, parts[0]);
+        check('Champion recorded', br.champion && br.champion.id === 'a');
+
+        const summary = document.getElementById('summary');
+        summary.className = fail === 0 ? 'pass' : 'fail';
+        summary.textContent =
+          fail === 0 ? `ALL ${pass} TESTS PASSED ✓` : `${pass} passed, ${fail} FAILED`;
+      })();
+    </script>
+  </body>
+</html>
