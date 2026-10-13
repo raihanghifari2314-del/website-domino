@@ -10,6 +10,14 @@ Game papan kasual berbasis web — **Gaple** & **QiuQiu**, 4 pemain per meja, de
 - 🏆 **Turnamen** — single-elimination 8 peserta, bracket tersimpan di browser.
 - 📱 **Responsif** — desktop & mobile browser.
 
+## Fitur "Juice & Fun" (client-side, tanpa backend)
+- 🔊 **Suara** — SFX klik, tile jatuh, pass, menang/kalah via WebAudio (tanpa file aset). Bisa di-toggle, tersimpan di localStorage.
+- 📳 **Getaran** — feedback haptic di perangkat mobile (Vibration API).
+- ✨ **Animasi** — tile "pop" saat ditaruh, reveal bertahap di QiuQiu, highlight giliran + ring countdown.
+- 🎉 **Layar hasil** — ringkasan skor + konfeti saat menang, tombol main lagi.
+- 🤖 **Kesulitan bot** — Mudah / Normal / Sulit (Sulit mempertimbangkan tile yang masih dipegang).
+- 🔢 **Indikator ujung papan** — angka ujung kiri/kanan rantai domino.
+
 ## Cara Menjalankan (lokal)
 
 **Paling gampang — tanpa install apa pun:**

@@ -5,6 +5,166 @@
 (function () {
   'use strict';
 
+  /* ================= settings (localStorage-backed) ================= */
+  const SETTINGS_KEY = 'domino-island:settings';
+  function loadSettings() {
+    try {
+      return Object.assign(
+        { sound: true, difficulty: 'normal' },
+        JSON.parse(localStorage.getItem(SETTINGS_KEY)) || {}
+      );
+    } catch (e) {
+      return { sound: true, difficulty: 'normal' };
+    }
+  }
+  function saveSettings(s) {
+    try {
+      localStorage.setItem(SETTINGS_KEY, JSON.stringify(s));
+    } catch (e) {}
+  }
+  const settings = loadSettings();
+
+  /* ================= sound (WebAudio, zero asset files) ================= */
+  const Sound = (function () {
+    let ctx = null;
+    function ac() {
+      if (!ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (AC) ctx = new AC();
+      }
+      if (ctx && ctx.state === 'suspended') ctx.resume();
+      return ctx;
+    }
+    function blip(freq, dur, type, gain) {
+      if (!settings.sound) return;
+      const c = ac();
+      if (!c) return;
+      const o = c.createOscillator();
+      const g = c.createGain();
+      o.type = type || 'sine';
+      o.frequency.value = freq;
+      g.gain.value = gain == null ? 0.08 : gain;
+      o.connect(g);
+      g.connect(c.destination);
+      const now = c.currentTime;
+      g.gain.setValueAtTime(g.gain.value, now);
+      g.gain.exponentialRampToValueAtTime(0.0001, now + dur);
+      o.start(now);
+      o.stop(now + dur);
+    }
+    return {
+      unlock: ac,
+      click: () => blip(520, 0.06, 'triangle', 0.05),
+      place: () => {
+        blip(300, 0.08, 'square', 0.06);
+        setTimeout(() => blip(180, 0.12, 'sine', 0.07), 40);
+      },
+      pass: () => blip(220, 0.14, 'sawtooth', 0.04),
+      deal: () => blip(440, 0.05, 'triangle', 0.04),
+      win: () => {
+        [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => blip(f, 0.18, 'triangle', 0.07), i * 110));
+      },
+      lose: () => {
+        [392, 330, 262].forEach((f, i) => setTimeout(() => blip(f, 0.2, 'sine', 0.07), i * 130));
+      },
+    };
+  })();
+
+  function buzz(pattern) {
+    if (settings.sound && navigator.vibrate) {
+      try {
+        navigator.vibrate(pattern);
+      } catch (e) {}
+    }
+  }
+
+  /* ================= confetti (canvas overlay) ================= */
+  function confettiBurst(durationMs) {
+    const canvas = document.createElement('canvas');
+    canvas.className = 'confetti-canvas';
+    document.body.appendChild(canvas);
+    const dpr = window.devicePixelRatio || 1;
+    function resize() {
+      canvas.width = window.innerWidth * dpr;
+      canvas.height = window.innerHeight * dpr;
+    }
+    resize();
+    const g = canvas.getContext('2d');
+    const colors = ['#ff8a3d', '#ff5e7e', '#28e0c0', '#ffd23f', '#4d9bff', '#a76bff', '#2fd27a'];
+    const parts = [];
+    const N = 160;
+    for (let i = 0; i < N; i++) {
+      parts.push({
+        x: Math.random() * canvas.width,
+        y: -Math.random() * canvas.height * 0.4,
+        vx: (Math.random() - 0.5) * 6 * dpr,
+        vy: (2 + Math.random() * 4) * dpr,
+        size: (4 + Math.random() * 6) * dpr,
+        rot: Math.random() * Math.PI,
+        vr: (Math.random() - 0.5) * 0.3,
+        color: colors[(Math.random() * colors.length) | 0],
+      });
+    }
+    const end = performance.now() + (durationMs || 2200);
+    function frame(now) {
+      g.clearRect(0, 0, canvas.width, canvas.height);
+      parts.forEach((p) => {
+        p.x += p.vx;
+        p.y += p.vy;
+        p.vy += 0.05 * dpr;
+        p.rot += p.vr;
+        g.save();
+        g.translate(p.x, p.y);
+        g.rotate(p.rot);
+        g.fillStyle = p.color;
+        g.fillRect(-p.size / 2, -p.size / 2, p.size, p.size * 0.6);
+        g.restore();
+      });
+      if (now < end) requestAnimationFrame(frame);
+      else canvas.remove();
+    }
+    requestAnimationFrame(frame);
+  }
+
+  /* ================= win/result overlay ================= */
+  function showResultOverlay(opts) {
+    // opts: { title, subtitle, rows:[{name,detail,win}], youWon, onAgain, againLabel }
+    const prev = document.querySelector('.result-overlay');
+    if (prev) prev.remove();
+    const ov = document.createElement('div');
+    ov.className = 'result-overlay';
+    const rows = (opts.rows || [])
+      .map(
+        (r) =>
+          '<div class="ro-row ' + (r.win ? 'win' : '') + '"><span>' + r.name + '</span><b>' + r.detail + '</b></div>'
+      )
+      .join('');
+    ov.innerHTML =
+      '<div class="result-card ' + (opts.youWon ? 'you-won' : 'you-lost') + '">' +
+      '<div class="ro-emoji">' + (opts.youWon ? '\uD83C\uDFC6' : '\uD83C\uDFC1') + '</div>' +
+      '<h2>' + opts.title + '</h2>' +
+      (opts.subtitle ? '<p class="ro-sub">' + opts.subtitle + '</p>' : '') +
+      (rows ? '<div class="ro-rows">' + rows + '</div>' : '') +
+      '<button class="btn big" id="roAgain">' + (opts.againLabel || 'Main Lagi') + '</button>' +
+      '</div>';
+    document.body.appendChild(ov);
+    if (opts.youWon) {
+      confettiBurst(2400);
+      Sound.win();
+      buzz([30, 40, 30, 40, 60]);
+    } else {
+      Sound.lose();
+      buzz(120);
+    }
+    ov.querySelector('#roAgain').addEventListener('click', () => {
+      ov.remove();
+      if (opts.onAgain) opts.onAgain();
+    });
+    ov.addEventListener('click', (e) => {
+      if (e.target === ov) ov.remove();
+    });
+  }
+
   /* ================= core/rng ================= */
   function mulberry32(seed) {
     let a = seed >>> 0;
@@ -396,14 +556,41 @@
   }
 
   /* ================= ai/bots ================= */
-  function gapleBotMove(game, playerIdx) {
+  function gapleBotMove(game, playerIdx, difficulty) {
+    difficulty = difficulty || 'normal';
     const moves = game.legalMoves(playerIdx);
     if (moves.length === 0) {
       if (game.drawMode && game.state.boneyard.length > 0) return { type: 'draw' };
       return { type: 'pass' };
     }
+    // Easy: random legal move.
+    if (difficulty === 'easy') {
+      const pick = moves[(Math.random() * moves.length) | 0];
+      return { type: 'play', tile: pick.tile, end: pick.end };
+    }
+    // Count how many of each pip value remain in this bot's own hand (for Hard planning).
+    const myHand = game.players[playerIdx].hand;
+    function pipCountInHand(v) {
+      let c = 0;
+      myHand.forEach((t) => {
+        if (t.a === v) c++;
+        if (t.b === v) c++;
+      });
+      return c;
+    }
     const ranked = moves
-      .map((m) => ({ m: m, score: pipSum(m.tile) + (isDouble(m.tile) ? 2 : 0) }))
+      .map((m) => {
+        let score = pipSum(m.tile) + (isDouble(m.tile) ? 2 : 0);
+        if (difficulty === 'hard') {
+          // Prefer plays that leave an open end matching values we still hold many of,
+          // so we keep future options; also dump heavy tiles early.
+          const open = m.end === 'left' ? game.state.leftEnd : game.state.rightEnd;
+          const outer = m.tile.a === open ? m.tile.b : m.tile.a;
+          score += pipCountInHand(outer) * 1.5;
+          score += pipSum(m.tile) * 0.5; // emphasise shedding points
+        }
+        return { m: m, score: score };
+      })
       .sort((a, b) => b.score - a.score);
     return { type: 'play', tile: ranked[0].m.tile, end: ranked[0].m.end };
   }
@@ -515,6 +702,15 @@
       '<div><h1>Domino <span>Island</span></h1><p class="tagline">Casual board game \u00B7 Gaple & QiuQiu</p></div></div>' +
       '<div class="profile-chip"><input id="nameInput" class="name-input" value="' + profile.name + '" maxlength="14" />' +
       '<div class="chips">\uD83D\uDCB0 ' + profile.chips + '</div></div></header>' +
+      '<section class="settings-bar">' +
+      '<div class="setting"><span class="setting-label">Suara</span>' +
+      '<button class="toggle ' + (settings.sound ? 'on' : '') + '" id="soundToggle" aria-label="Toggle suara"><span class="knob"></span></button></div>' +
+      '<div class="setting"><span class="setting-label">Kesulitan Bot</span>' +
+      '<div class="seg" id="diffSeg">' +
+      '<button data-diff="easy" class="' + (settings.difficulty === 'easy' ? 'active' : '') + '">Mudah</button>' +
+      '<button data-diff="normal" class="' + (settings.difficulty === 'normal' ? 'active' : '') + '">Normal</button>' +
+      '<button data-diff="hard" class="' + (settings.difficulty === 'hard' ? 'active' : '') + '">Sulit</button>' +
+      '</div></div></section>' +
       '<section class="mode-grid">' +
       '<button class="mode-card gaple" data-mode="gaple"><div class="mode-emoji">\uD83C\uDC31</div><h2>Gaple</h2><p>Domino klasik 4 pemain. Habiskan kartu, kunci lawan.</p><span class="play-cta">Main \u2192</span></button>' +
       '<button class="mode-card qiuqiu" data-mode="qiuqiu"><div class="mode-emoji">\uD83C\uDFB4</div><h2>QiuQiu</h2><p>Kiu-Kiu / Domino 99. Nilai tertinggi menang pot.</p><span class="play-cta">Main \u2192</span></button>' +
@@ -527,8 +723,30 @@
       profile.name = nameInput.value.trim() || 'Pemain';
       saveProfile(profile);
     });
+    const soundToggle = root.querySelector('#soundToggle');
+    soundToggle.addEventListener('click', () => {
+      settings.sound = !settings.sound;
+      saveSettings(settings);
+      soundToggle.classList.toggle('on', settings.sound);
+      if (settings.sound) {
+        Sound.unlock();
+        Sound.click();
+      }
+    });
+    root.querySelector('#diffSeg').querySelectorAll('button').forEach((b) => {
+      b.addEventListener('click', () => {
+        settings.difficulty = b.dataset.diff;
+        saveSettings(settings);
+        root.querySelector('#diffSeg').querySelectorAll('button').forEach((x) => x.classList.remove('active'));
+        b.classList.add('active');
+        Sound.unlock();
+        Sound.click();
+      });
+    });
     root.querySelectorAll('.mode-card').forEach((card) => {
       card.addEventListener('click', () => {
+        Sound.unlock();
+        Sound.click();
         profile.name = nameInput.value.trim() || 'Pemain';
         saveProfile(profile);
         if (cfg.onSelectMode) cfg.onSelectMode(card.dataset.mode, profile);
@@ -543,7 +761,9 @@
     cfg = cfg || {};
     const seed = cfg.seed != null ? cfg.seed : randomSeed();
     const game = new GapleGame(cfg.players, seed, { drawMode: false, targetScore: 100 });
+    const difficulty = cfg.difficulty || settings.difficulty || 'normal';
     let selectedTileId = null;
+    let turnTimer = null;
 
     root.innerHTML =
       '<div class="table-view"><div class="table-top-bar">' +
@@ -588,7 +808,11 @@
         el.board.innerHTML = '<div class="board-empty">Papan kosong \u2014 pembuka memulai</div>';
         return;
       }
-      el.board.innerHTML = snap.line.map((t) => tileHTML(t, { orientation: 'h' })).join('');
+      const tiles = snap.line.map((t) => tileHTML(t, { orientation: 'h' })).join('');
+      el.board.innerHTML =
+        '<span class="end-badge left">' + snap.leftEnd + '</span>' +
+        tiles +
+        '<span class="end-badge right">' + snap.rightEnd + '</span>';
     }
     function renderHand(snap) {
       const me = game.players[0];
@@ -605,10 +829,12 @@
         .join('');
       el.hand.querySelectorAll('.tile').forEach((node) => {
         node.addEventListener('click', () => {
+          Sound.unlock();
           if (!node.classList.contains('playable')) {
             toast('Tile itu tidak bisa dimainkan sekarang', 'warn');
             return;
           }
+          Sound.click();
           selectedTileId = node.dataset.id;
           renderHand(game.snapshot());
           el.playBtn.disabled = false;
@@ -630,12 +856,52 @@
       const p = game.players[snap.turn];
       el.turnIndicator.textContent = p.isBot ? p.name + ' berpikir\u2026' : 'Giliran kamu';
     }
+    // Visual countdown ring on the active player's avatar.
+    function restartTurnTimer(snap) {
+      if (turnTimer) {
+        clearTimeout(turnTimer.fallback);
+        turnTimer = null;
+      }
+      if (snap.phase !== 'playing') return;
+      const seat = root.querySelector('#seat-' + snap.turn + ' .player-badge');
+      if (!seat) return;
+      const ring = document.createElement('div');
+      ring.className = 'turn-ring';
+      seat.appendChild(ring);
+      // Auto-pass/auto-play safety for the human if idle too long (keeps game flowing).
+      const isHuman = snap.turn === 0;
+      const limit = isHuman ? 20000 : 0;
+      turnTimer = { fallback: null };
+      if (isHuman && limit) {
+        turnTimer.fallback = setTimeout(() => {
+          if (game.state.turn !== 0 || game.state.phase !== 'playing') return;
+          if (game.canPlay(0)) {
+            const mv = gapleBotMove(game, 0, 'easy');
+            game.applyAction(mv);
+          } else {
+            game.applyAction({ type: 'pass' });
+          }
+          afterMove();
+        }, limit);
+      }
+    }
     function renderAll() {
       const snap = game.snapshot();
       renderSeats(snap);
       renderBoard(snap);
       renderHand(snap);
       renderTurn(snap);
+      restartTurnTimer(snap);
+    }
+    // Called after any move resolves to refresh + continue bot loop + check end.
+    function afterMove() {
+      renderAll();
+      const snap = game.snapshot();
+      if (snap.phase === 'round_over' || snap.phase === 'match_over') {
+        showGapleResult(snap);
+        return;
+      }
+      maybeBotLoop();
     }
     function playSelected(end) {
       if (!selectedTileId) return;
@@ -653,9 +919,64 @@
         toast('Gerakan tidak valid', 'warn');
         return;
       }
+      Sound.place();
+      buzz(15);
       selectedTileId = null;
-      renderAll();
-      maybeBotLoop();
+      flashBoard();
+      afterMove();
+    }
+    // Little pop animation on the most recently placed board tile.
+    function flashBoard() {
+      requestAnimationFrame(() => {
+        const tiles = el.board.querySelectorAll('.tile');
+        if (!tiles.length) return;
+        const last = tiles[tiles.length - 1];
+        last.classList.add('just-placed');
+        setTimeout(() => last.classList.remove('just-placed'), 350);
+      });
+    }
+    function showGapleResult(snap) {
+      const rows = game.players.map((p, i) => ({
+        name: p.name,
+        detail: p.score + ' pts',
+        win: snap.phase === 'match_over' ? i === snap.matchWinner : i === snap.roundWinner,
+      }));
+      if (snap.phase === 'match_over') {
+        const youWon = snap.matchWinner === 0;
+        const inTournament = !!cfg.onMatchOver;
+        showResultOverlay({
+          title: youWon ? 'Kamu Juara Match!' : game.players[snap.matchWinner].name + ' Juara Match',
+          subtitle: 'Skor akhir sampai ' + game.targetScore,
+          rows: rows,
+          youWon: youWon,
+          againLabel: inTournament ? 'Lanjut Turnamen' : 'Match Baru',
+          onAgain: () => {
+            if (inTournament) {
+              cfg.onMatchOver(snap.matchWinner);
+              return;
+            }
+            game.players.forEach((p) => (p.score = 0));
+            game.state.matchWinner = null;
+            game.startRound();
+            selectedTileId = null;
+            afterMove();
+          },
+        });
+      } else {
+        const youWon = snap.roundWinner === 0;
+        showResultOverlay({
+          title: youWon ? 'Kamu Menang Ronde!' : game.players[snap.roundWinner].name + ' Menang Ronde',
+          subtitle: 'Lanjut ke ronde berikutnya',
+          rows: rows,
+          youWon: youWon,
+          againLabel: 'Ronde Berikutnya',
+          onAgain: () => {
+            game.startRound();
+            selectedTileId = null;
+            afterMove();
+          },
+        });
+      }
     }
     function showEndPicker(tile, legal) {
       const picker = document.createElement('div');
@@ -674,46 +995,61 @@
     }
     function maybeBotLoop() {
       const snap = game.snapshot();
-      if (snap.phase !== 'playing') {
-        if (snap.phase === 'match_over' && cfg.onMatchOver) cfg.onMatchOver(snap.matchWinner);
-        return;
-      }
+      if (snap.phase !== 'playing') return;
       if (snap.turn === 0) return;
       setTimeout(() => {
-        const action = gapleBotMove(game, game.state.turn);
+        if (game.state.phase !== 'playing') return;
+        const action = gapleBotMove(game, game.state.turn, difficulty);
         const res = game.applyAction(action);
         if (!res.ok && action.type === 'play') game.applyAction({ type: 'pass' });
-        renderAll();
-        maybeBotLoop();
+        if (action.type === 'pass') {
+          Sound.pass();
+        } else {
+          Sound.place();
+          flashBoard();
+        }
+        afterMove();
       }, BOT_DELAY);
     }
 
-    root.querySelector('#exitBtn').addEventListener('click', () => cfg.onExit && cfg.onExit());
+    root.querySelector('#exitBtn').addEventListener('click', () => {
+      if (turnTimer) clearTimeout(turnTimer.fallback);
+      cfg.onExit && cfg.onExit();
+    });
     root.querySelector('#newRoundBtn').addEventListener('click', () => {
+      Sound.unlock();
+      Sound.deal();
       game.startRound();
       selectedTileId = null;
-      renderAll();
-      maybeBotLoop();
+      afterMove();
     });
-    el.playBtn.addEventListener('click', () => playSelected());
+    el.playBtn.addEventListener('click', () => {
+      Sound.unlock();
+      playSelected();
+    });
     el.passBtn.addEventListener('click', () => {
+      Sound.unlock();
       const res = game.applyAction({ type: 'pass' });
       if (!res.ok) {
         toast('Kamu masih punya langkah legal', 'warn');
         return;
       }
-      renderAll();
-      maybeBotLoop();
+      Sound.pass();
+      buzz(10);
+      afterMove();
     });
-    game.on('round_over', (e) =>
-      toast(game.players[e.winner].name + ' menang ronde (+' + e.gained + ', ' + e.reason + ')', 'success')
-    );
-    game.on('match_over', (e) => toast('\uD83C\uDFC6 ' + game.players[e.winner].name + ' juara match!', 'success'));
 
+    Sound.deal();
     game.startRound();
     renderAll();
     maybeBotLoop();
-    return { game: game, destroy: () => (root.innerHTML = '') };
+    return {
+      game: game,
+      destroy: () => {
+        if (turnTimer) clearTimeout(turnTimer.fallback);
+        root.innerHTML = '';
+      },
+    };
   }
 
   /* ================= ui/qiuqiu ================= */
@@ -759,22 +1095,48 @@
     }
     function reveal() {
       if (revealed) return;
+      Sound.unlock();
       revealed = true;
       const r = game.resolve();
       render();
-      toast(game.players[r.winner].name + ' memenangkan pot!', 'success');
-      el.resultLine.textContent = game.players[r.winner].name + ' menang.';
       el.revealBtn.disabled = true;
+      // Staggered flip of each seat, then show result.
+      const seats = el.seats.querySelectorAll('.qq-seat');
+      seats.forEach((s, i) => {
+        setTimeout(() => {
+          s.classList.add('revealed');
+          Sound.click();
+        }, i * 220);
+      });
+      setTimeout(() => {
+        const youWon = r.winner === 0;
+        el.resultLine.textContent = game.players[r.winner].name + ' menang.';
+        showResultOverlay({
+          title: youWon ? 'Kamu Menang Pot!' : game.players[r.winner].name + ' Menang Pot',
+          subtitle: 'Pot: ' + game.state.pot + ' chips',
+          rows: r.results.map((e) => ({
+            name: e.name,
+            detail: e.eval.label,
+            win: e.idx === r.winner,
+          })),
+          youWon: youWon,
+          againLabel: 'Bagi Ulang',
+          onAgain: () => startFreshRound(),
+        });
+      }, seats.length * 220 + 200);
     }
-    root.querySelector('#exitBtn').addEventListener('click', () => cfg.onExit && cfg.onExit());
-    root.querySelector('#dealBtn').addEventListener('click', () => {
+    function startFreshRound() {
       revealed = false;
       el.revealBtn.disabled = false;
       el.resultLine.textContent = '';
+      Sound.deal();
       game.startRound();
       render();
-    });
+    }
+    root.querySelector('#exitBtn').addEventListener('click', () => cfg.onExit && cfg.onExit());
+    root.querySelector('#dealBtn').addEventListener('click', startFreshRound);
     el.revealBtn.addEventListener('click', reveal);
+    Sound.deal();
     game.startRound();
     render();
     return { game: game, destroy: () => (root.innerHTML = '') };

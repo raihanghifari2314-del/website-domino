@@ -89,6 +89,26 @@
         check('Gaple round terminates (no infinite loop)', g3.state.phase !== 'playing' && guard < 1000);
         check('Gaple round has a winner', g3.state.roundWinner != null);
 
+        // 4b. All difficulty levels terminate and only produce legal moves
+        ['easy', 'normal', 'hard'].forEach((diff) => {
+          const gd = new DI.GapleGame(players, 1234 + diff.length);
+          gd.startRound();
+          let g = 0,
+            illegal = false;
+          while (gd.state.phase === 'playing' && g < 2000) {
+            const idx = gd.state.turn;
+            const a = DI.gapleBotMove(gd, idx, diff);
+            if (a.type === 'play') {
+              const ok = gd.legalMoves(idx).some((m) => m.tile.id === a.tile.id);
+              if (!ok) illegal = true;
+            }
+            const res = gd.applyAction(a);
+            if (!res.ok && a.type === 'play') gd.applyAction({ type: 'pass' });
+            g++;
+          }
+          check('Bot[' + diff + '] terminates & plays only legal tiles', gd.state.phase !== 'playing' && !illegal);
+        });
+
         // 5. Board ends are consistent with the line
         if (g3.state.line.length > 0) {
           const left = g3.state.line[0].a;
